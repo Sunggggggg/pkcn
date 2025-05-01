@@ -35,7 +35,6 @@ class Hi4D(Image_base):
         VAL_SPLIT = [16, 19, 22]
         TEST_SPLIT = [12, 15, 32]
         pair_list = eval(f"{split.upper()}_SPLIT")    
-        use_depth_info = self.use_depth_info = split.upper() == 'TEST'
         
         ### ### 
         CAMERA_LIST = [4, 16, 28, 40, 52, 64, 76, 88]
@@ -85,12 +84,7 @@ class Hi4D(Image_base):
                     
                     intrin_collect[:, idx] = intrinsic 
                     extrin_collect[:, idx] = extrinsic
-                    
-                    ### Depth map ###
-                    if use_depth_info :
-                        depth_folder = osp.join('./data/depth_map', f"pair{pair_id:02d}", action, str(cam_id))
-                        depth_file_list = sorted(glob.glob(f"{depth_folder}/*.png"))
-                        depth_collect[:, idx] = depth_file_list
+
                 
                 file_collect = file_collect.reshape(-1) # [T*[view0, view1, view2, view3]] Tx4
                 intrin_collect = intrin_collect.reshape(-1, 3, 3)   # [Tx4, 3, 3]
@@ -100,10 +94,6 @@ class Hi4D(Image_base):
                 intrinsics.append(intrin_collect)
                 extrinsics.append(extrin_collect)
                 
-                if use_depth_info :
-                    depth_collect = depth_collect.reshape(-1)
-                    depth_collects.append(depth_collect)
-                
         file_paths = np.concatenate(file_collects, axis=0)      # [Total_seq * 4]
         intrinsics = np.concatenate(intrinsics, axis=0)     # [Total_seq * 4, 3, 3]
         extrinsics = np.concatenate(extrinsics, axis=0)     # [Total_seq * 4, 3, 4]
@@ -112,10 +102,6 @@ class Hi4D(Image_base):
         print(f">>> Total camera view : {self.camera_view} ")
         self.file_paths = file_paths
         self.clip_paths_counting_set()
-        
-        if use_depth_info :
-            depth_paths = np.concatenate(depth_collects, axis=0)    # [Total_seq * 4]
-            self.depth_paths = depth_paths
         
         self.intrinsics = intrinsics
         self.extrinsics = extrinsics

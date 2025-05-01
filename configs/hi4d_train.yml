@@ -1,0 +1,71 @@
+
+ARGS:
+ tab: 'relative_pos'
+ num_views: 4
+ dataset_rootdir: '/mnt/data/hi4d_dataset'
+ dataset: 'hi4d'
+ eval_datasets: 'hi4d'
+ GPUS: 0,1
+ distributed_training: False
+ model_version: 1
+ pretrain: 'imagenet'
+ match_preds_to_gts_for_supervision: True
+
+ master_batch_size: -1
+ val_batch_size: 1
+ batch_size: 8
+ nw: 4
+ nw_eval: 2
+ lr: 0.00005
+
+ fix_backbone_training_scratch: False
+ eval: False
+ supervise_global_rot: False
+
+ model_return_loss: False
+ collision_aware_centermap: True
+ collision_factor: 0.2
+ homogenize_pose_space: True
+ shuffle_crop_mode: True
+ shuffle_crop_ratio_2d: 0.1
+ shuffle_crop_ratio_3d: 0.4
+
+ merge_smpl_camera_head: False
+ head_block_num: 2
+
+ backbone: 'dinov2'
+ centermap_size: 64
+ centermap_conf_thresh: 0.2
+
+ test_interval: 2500
+
+ segloss_epoch: -1
+ 
+ fine_tune: True
+ save_visualization_on_img: False
+ model_path: ./PKCN_best3.pkl # Fine-tuning
+
+loss_weight:
+  MPJPE: 200.
+  PAMPJPE: 360.
+  P_KP2D: 400.
+  Pose: 80.
+  Shape: 6.
+  Prior: 1.6
+  CenterMap: 160.
+  Segmentation: 0.
+
+  R_MPJPE: 2000.
+  R_PAMPJPE: 3600.
+  R_P_KP2D: 4000.
+  R_Pose: 800.
+  R_Shape: 60.
+  R_Prior: 16.
+  R_CenterMap: 1600.
+  R_Segmentation: 0.
+
+  G_Pose: 800.
+  G_Shape: 60.
+
+sample_prob:
+ hi4d: 1.0

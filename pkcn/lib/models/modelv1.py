@@ -30,13 +30,17 @@ class ROMP(Base):
     def __init__(self, backbone=None,**kwargs):
         super(ROMP, self).__init__()
         print('=========== Model infomation ===========')
-        print(f'Backbone : {args.backbone}')
+        print(f'Backbone : {args().backbone}')
         print(f'# of viewpoint ')
         
         self.backbone = backbone
         self._result_parser = ResultParser()
         self.params_map_parser = SMPLWrapper()
-        self._build_head()
+        self._build_encoder()
+        for param in self.parameters():
+            param.requires_grad = False 
+        
+        self._build_decoder()
         if args().model_return_loss:
             self._calc_loss = Loss()
 
