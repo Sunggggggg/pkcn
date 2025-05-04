@@ -23,7 +23,7 @@ class Trainer(Base):
         logging.info('Initialization of Trainer finished!')
 
     def train(self):
-        self.test(0)
+        # self.test(0)
         #init_seeds(self.local_rank, cuda_deterministic=False)
         logging.info('start training')
         self.model.train()
@@ -40,25 +40,28 @@ class Trainer(Base):
 
     def train_step(self, meta_data):
         self.optimizer.zero_grad()
-        outputs_list, pred_pose_params, pred_betas, _ = self.multiview_network_forward(self.model, meta_data, self.train_cfg)  # [B, 144], [B, 10]
+        outputs_list, _ = self.multiview_network_forward(self.model, meta_data, self.train_cfg)  # [B, 144], [B, 10]
         final_outputs_list, loss = [], 0.0
         
         # Per-view loss
-        for view, outputs in enumerate(outputs_list) :
-            if not self.model_return_loss:
-                outputs.update(self._calc_loss(outputs, view=view))
-            
-            loss_per_view, outputs = self.mutli_task_uncertainty_weighted_loss(outputs, view)
-            loss += loss_per_view
-            final_outputs_list.append(outputs)
-            
-        if self.model_precision=='fp16':
-            self.scaler.scale(loss).backward()
-            self.scaler.step(self.optimizer)
-            self.scaler.update()
+        if outputs_list is None :
+            return final_outputs_list, loss
         else:
-            loss.backward()
-            self.optimizer.step()
+            for view, outputs in enumerate(outputs_list) :
+                if not self.model_return_loss:
+                    outputs.update(self._calc_loss(outputs, view=view))
+                
+                loss_per_view, outputs = self.mutli_task_uncertainty_weighted_loss(outputs, view)
+                loss += loss_per_view
+                final_outputs_list.append(outputs)
+                
+            if self.model_precision=='fp16':
+                self.scaler.scale(loss).backward()
+                self.scaler.step(self.optimizer)
+                self.scaler.update()
+            else:
+                loss.backward()
+                self.optimizer.step()
         return final_outputs_list, loss
         
     def train_log_visualization(self, outputs, loss, run_time, data_time, losses, losses_dict, epoch, iter_index, multi_view=None):
@@ -117,24 +120,20 @@ class Trainer(Base):
             meta_data["iter_idx"] = torch.tensor([[iter_index]for _ in range(batch_size)])
             outputs, loss = self.train_step(meta_data)
 
-            if self.local_rank in [-1, 0]:
+            if (self.local_rank in [-1, 0]) and (len(outputs) != 0):
                 run_time.update(time.time() - run_start_time)
                 self.train_log_visualization(outputs[0], loss, run_time, data_time, losses, losses_dict, epoch, iter_index, multi_view=True)
             
             if self.global_count%self.test_interval==0 or self.global_count==self.fast_eval_iter: #self.print_freq*2
                 save_model(self.model,'{}_val_cache.pkl'.format(self.tab),parent_folder=self.model_save_dir)
-                self.test(epoch)
+                # self.test(epoch)
             
             if self.distributed_training:
                 # wait for rank 0 process finish the job
                 torch.distributed.barrier()
             batch_start_time = time.time()
 
-        if epoch % 2 ==0:
-            title = '{}_{}.pkl'.format(self.tab,epoch)
-            save_model(self.model, title, parent_folder=self.model_save_dir)
-        
-        title  = '{}.pkl'.format(self.tab)
+        title = '{}_{}.pkl'.format(self.tab,epoch)
         save_model(self.model,title,parent_folder=self.model_save_dir)
         self.e_sche.step()
     

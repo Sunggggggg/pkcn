@@ -3,7 +3,7 @@ import torch
 import torch.nn as nn
 import numpy as np 
 import logging
-
+import torch.nn.functional as F
 
 import config
 from config import args
@@ -13,6 +13,25 @@ from models.smpl_wrapper import SMPLWrapper
 from maps_utils import HeatmapParser,CenterMap
 from utils.center_utils import process_gt_center, expand_flat_inds
 from utils.rot_6D import rot6D_to_angular
+
+def parameter_sampling_with_offset(maps, batch_ids, flat_inds, offsets):
+    B, C, H, W = maps.shape
+    N = flat_inds.size(0)
+
+    # Fix deprecated warning
+    y = torch.div(flat_inds, W, rounding_mode='trunc').float()
+    x = (flat_inds % W).float()
+
+    y += offsets[:, 0]
+    x += offsets[:, 1]
+
+    norm_y = (y / (H - 1)) * 2 - 1
+    norm_x = (x / (W - 1)) * 2 - 1
+    grid = torch.stack([norm_x, norm_y], dim=1).view(N, 1, 1, 2)
+
+    selected_maps = maps[batch_ids]  # [N, C, H, W]
+    sampled = F.grid_sample(selected_maps, grid, mode='bilinear', align_corners=True)
+    return sampled.squeeze(-1).squeeze(-1)
 
 class ResultParser(nn.Module):
     def __init__(self, with_smpl_parser=True):
@@ -51,8 +70,13 @@ class ResultParser(nn.Module):
             person_ids = batch_ids.clone()
         outputs['detection_flag'] = torch.Tensor([True for _ in range(len(batch_ids))]).cuda()
 
-        if 'params_maps' in outputs and 'params_pred' not in outputs:
+        if 'params_maps' in outputs and 'params_pred' not in outputs:      
             outputs['params_pred'] = self.parameter_sampling(outputs['params_maps'], batch_ids, flat_inds, use_transform=True)
+            
+        if 'offset_maps' in outputs:
+            offset = self.parameter_sampling(outputs['offset_maps'], batch_ids, flat_inds, use_transform=True)
+            params_pred = parameter_sampling_with_offset(outputs['params_maps'], batch_ids, flat_inds, offset)
+            outputs['params_pred'] = params_pred
         
         ### Ray dirction sampling ###
         if 'ray_maps' in meta_data :
@@ -209,7 +233,8 @@ class ResultParser(nn.Module):
             outputs['depth_pred'] = depth_pred
             outputs['center_3d'] = center_3d
             
-        if 'params_pred_block' not in outputs :
+        # if 'params_pred_block' not in outputs :
+        if False :
             all_inds = [expand_flat_inds(flat_inds[i], args().centermap_size, args().centermap_size, False)
                         for i in range(len(flat_inds))]
 

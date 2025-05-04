@@ -34,6 +34,8 @@ class ROMP(Base):
         print('=========== Model infomation ===========')
         print(f'Backbone : {args().backbone}')
         print(f'# of viewpoints {args().num_views}')
+        print(f'Use mask info. : {args().use_mask}')
+        
         self.num_views = args().num_views
         self.backbone = backbone
         self._result_parser = ResultParser()
@@ -53,7 +55,8 @@ class ROMP(Base):
             
         self.view_keys = ['image', 'person_centers', 'centermap', 'offsets', 
                           'all_person_detected_mask', 'full_kp2d', 'valid_masks', 
-                          'kp_3d', 'params', 'global_params', 'image_org', 'subject_ids', 'rot_flip']
+                          'kp_3d', 'params', 'global_params', 'image_org', 'subject_ids', 'rot_flip',
+                          'mask']
         self.meta_keys = ['batch_ids', 'epoch', 'iter_idx']
 
     def matching_forward(self, meta_data, **cfg):
@@ -105,20 +108,42 @@ class ROMP(Base):
         return outputs_list
 
     def feed_forward(self, meta_data):
-        x = self.backbone(meta_data['image'].contiguous().cuda())   # [B, 32, 128, 128]
-        outputs = self.head_forward(x)
+        img = meta_data['image'].contiguous().cuda()
+        mask = meta_data['mask'].contiguous().cuda()
+
+        x = self.backbone(img)   # [B, 32, 128, 128]
+        outputs = self.head_forward(x, img, mask)
         return outputs
 
-    def head_forward(self,x):
+    def head_forward(self, x, img, mask):
+        """
+        x       : [B, 32, 128, 128]
+        img     : => [B, 3, 512, 512]
+        mask    : => [B, 1, 512, 512]
+        """
         x = torch.cat((x, self.coordmaps.to(x.device).repeat(x.shape[0],1,1,1)), 1)
+        img = img.permute(0, 3, 1, 2)   # [B, 3, H, W]
+        mask = mask.permute(0, 3, 1, 2) # [B, 1, H, W]
         
         params_maps = self.final_layers[1](x)
         center_maps = self.final_layers[2](x)
         segment_maps = self.final_layers[3](x)
         feature_maps = self.final_layers[4](x)
+        mask_maps = self.final_layers[5](mask)
 
-        output = {'params_maps':params_maps.float(), 'center_map':center_maps.float(), 
-                  'segmentation_maps':segment_maps.float(), 'feature_maps':feature_maps.float()}
+        offset_x = torch.cat([img, mask], dim=1)                # [B, 4, 512, 512]
+        offset_maps = self.final_layers[6](offset_x) + 0.5      # [B, 2, 256]
+
+        params_maps += mask_maps
+        
+        output = {'params_maps':params_maps.float(),        # [B, 400, cm, cm]
+                  'center_map':center_maps.float(),         # [B, 1, cm, cm]
+                  'segmentation_maps':segment_maps.float(), # [B, 128, cm, cm]
+                  'feature_maps':feature_maps.float(),      # [B, 128, cm, cm]
+                  'mask_maps': mask_maps.float(),           # [B, 1, cm, cm]
+                  'offset_maps': offset_maps.float()        # [B, 2, cm, cm]
+                  }
+        
         return output
 
     def tail_forward(self,outputs, view):
@@ -284,7 +309,7 @@ class ROMP(Base):
                            'NUM_CHANNELS': num_channels}
 
         self.final_layers = self._make_final_layers(self.backbone.backbone_channels)
-        self.coordmaps = get_coord_maps(32)
+        self.coordmaps = get_coord_maps(128)
 
     def _build_decoder(self):
         num_channels, num_joints = 16, 24
@@ -313,11 +338,14 @@ class ROMP(Base):
         final_layers = []
         input_channels += 2
 
-        final_layers.append(None)
-        final_layers.append(self._make_head_layers(input_channels, self.output_cfg['NUM_PARAM_MAP']))   # 64
-        final_layers.append(self._make_head_layers(input_channels, self.output_cfg['NUM_CENTER_MAP']))  # 1
-        final_layers.append(self._make_head_layers(input_channels, self.output_cfg['NUM_CHANNELS'] * 8))# 400
-        final_layers.append(self._make_head_layers(input_channels, self.output_cfg['NUM_CHANNELS'] * 8))# 400
+        final_layers.append(None)   # 0
+        final_layers.append(self._make_head_layers(input_channels, self.output_cfg['NUM_PARAM_MAP']))   # 1
+        final_layers.append(self._make_head_layers(input_channels, self.output_cfg['NUM_CENTER_MAP']))  # 2
+        final_layers.append(self._make_head_layers(input_channels, self.output_cfg['NUM_CHANNELS'] * 8))# 3
+        final_layers.append(self._make_head_layers(input_channels, self.output_cfg['NUM_CHANNELS'] * 8))# 4
+        
+        final_layers.append(self._make_mask_layers(1, 1))                       # 5
+        final_layers.append(self._make_mask_layers(4, 2))  # 6
 
         return nn.ModuleList(final_layers)
 
@@ -346,6 +374,31 @@ class ROMP(Base):
             kernel_size=1,stride=1,padding=0))
 
         return nn.Sequential(*head_layers)
+    
+    def _make_mask_layers(self, input_dim, output_dim):
+        conv_block = nn.Sequential(
+            # 512x512x1 → 256x256x32
+            nn.Conv2d(input_dim, 32, kernel_size=3, stride=2, padding=1),
+            nn.BatchNorm2d(32),
+            nn.ReLU(),
+
+            # 256x256x32 → 128x128x64
+            nn.Conv2d(32, 64, kernel_size=3, stride=2, padding=1),
+            nn.BatchNorm2d(64),
+            nn.ReLU(),
+
+            # 128x128x64 → 64x64x128
+            nn.Conv2d(64, 32, kernel_size=3, stride=2, padding=1),
+            nn.BatchNorm2d(32),
+            nn.ReLU(),
+
+            # 64x64x128 → 64x64x400
+            nn.Conv2d(32, output_dim, kernel_size=1),
+            nn.BatchNorm2d(output_dim),
+            nn.ReLU(),
+        )
+        
+        return conv_block
 
     def _build_multiview_module(self):
         num_channels = self.output_cfg['NUM_CHANNELS']  # 16
@@ -359,9 +412,9 @@ class ROMP(Base):
 
     def _get_trans_cfg(self):
         if self.outmap_size == 32:
-            kernel_sizes = [3]
-            paddings = [1]
-            strides = [1]
+            kernel_sizes = [3,3]
+            paddings = [1,1]
+            strides = [2,2]
         elif self.outmap_size == 64:
             kernel_sizes = [3]
             paddings = [1]
@@ -370,7 +423,6 @@ class ROMP(Base):
             kernel_sizes = [3]
             paddings = [1]
             strides = [1]
-            
         elif self.outmap_size == 16:
             kernel_sizes = [3]
             paddings = [1]

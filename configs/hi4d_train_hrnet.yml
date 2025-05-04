@@ -1,19 +1,22 @@
 
 ARGS:
- tab: 'relative_pos'
+ tab: 'mask_token'
+ 
  num_views: 4
  dataset_rootdir: '/mnt/data/hi4d_dataset'
  dataset: 'hi4d'
  eval_datasets: 'hi4d'
  GPUS: 0,1
  distributed_training: False
- model_version: 1
+ model_version: 2
  pretrain: 'imagenet'
  match_preds_to_gts_for_supervision: True
 
  master_batch_size: -1
- val_batch_size: 1
+ val_batch_size: 2
+ max_person: 2
  batch_size: 8
+ use_mask: True
  nw: 4
  nw_eval: 2
  lr: 0.00005
@@ -33,7 +36,8 @@ ARGS:
  merge_smpl_camera_head: False
  head_block_num: 2
 
- backbone: 'dinov2'
+ backbone: 'hrnet'
+ input_size: 512
  centermap_size: 64
  centermap_conf_thresh: 0.2
 
@@ -43,8 +47,8 @@ ARGS:
  
  fine_tune: True
  save_visualization_on_img: False
- model_path: ./PKCN_best3.pkl # Fine-tuning
-
+ model_path: /mnt/SKY/PKCN_private/PKCN_best3.pkl
+ 
 loss_weight:
   MPJPE: 200.
   PAMPJPE: 360.

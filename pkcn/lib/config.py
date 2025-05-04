@@ -172,6 +172,7 @@ def parse_args(input_args=None):
     ### ###
     multiview_group = parser.add_argument_group(title='Multiview options')
     multiview_group.add_argument('--num_views', type = int, default = 4)
+    multiview_group.add_argument('--use_mask', type = bool, default = True)
 
     parsed_args = parser.parse_args(args=input_args)
     parsed_args.adjust_lr_epoch = []

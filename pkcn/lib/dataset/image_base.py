@@ -151,16 +151,16 @@ class Image_base(Dataset):
         crop_camIntrin = adjust_intrinsic_for_pad_and_resize(camIntrin, pad_trbl, padded_shape, args().input_size)
         
         input_data = {
-            'image': torch.from_numpy(dst_image).float(),#.permute(2,0,1),
-            'image_org': torch.from_numpy(org_image),#.permute(2,0,1),
-            'full_kp2d': torch.from_numpy(full_kp2ds).float(),
-            'person_centers':torch.from_numpy(person_centers).float(), 
-            'subject_ids':torch.from_numpy(subject_ids).long(),
-            'centermap': centermap.float(),
-            'kp_3d': torch.from_numpy(kp3d).float(),
-            'params': torch.from_numpy(params).float(),
-            'global_params': torch.from_numpy(global_params).float(),   # [1, 154]
-            'valid_masks':torch.from_numpy(valid_masks).bool(),
+            'image': torch.from_numpy(dst_image).float(),               # [512, 512, 3]
+            'image_org': torch.from_numpy(org_image),                   # [512, 512, 3]
+            'full_kp2d': torch.from_numpy(full_kp2ds).float(),          # [max_person, 54, 2]
+            'person_centers':torch.from_numpy(person_centers).float(),  # [max_person, 2]
+            'subject_ids':torch.from_numpy(subject_ids).long(),         # 
+            'centermap': centermap.float(),                             # [1, center_map, center_map]
+            'kp_3d': torch.from_numpy(kp3d).float(),                    # [max_person, 54, 3]
+            'params': torch.from_numpy(params).float(),                 # [max_person, 82]
+            'global_params': torch.from_numpy(global_params).float(),   # [154]
+            'valid_masks':torch.from_numpy(valid_masks).bool(),         # 
             'offsets': torch.from_numpy(offsets).float(),               # [2, 4(crop_trbl), 4(pad_trbl)]
             'rot_flip': torch.Tensor([rot, flip]).float(),
             'all_person_detected_mask':torch.Tensor([all_person_detected_mask]).bool(),
@@ -183,6 +183,16 @@ class Image_base(Dataset):
                                          interpolation=cv2.INTER_AREA)
             input_data['depth_image'] = torch.from_numpy(depth_dst_image).float()
 
+        ### Mask ###
+        if info.get('use_mask') :
+            mask_img_info = process_image(info['mask'], info['kp2ds'], augments=(scale, rot, flip), 
+                                           is_pose2d=info['vmask_2d'][:,0], multiperson=mp_mode)
+            mask_image, mask_image_wbg, mask_full_kps, mask_offsets = mask_img_info
+            mask_image, mask_dst_image, mask_org_image = self.prepare_image(mask_image, mask_image_wbg, augments=(False, False))   # [512, 512]
+            
+            # mask_dst_image = cv2.resize(mask_dst_image, (args().centermap_size, args().centermap_size), interpolation=cv2.INTER_AREA)
+            input_data['mask'] = torch.from_numpy(mask_dst_image)[..., None].float()
+        
         if args().learn_2dpose:
             input_data.update({'heatmap':torch.from_numpy(heatmap).float()})
         if args().learn_AE:

@@ -111,7 +111,7 @@ class Loss(nn.Module):
                     print('PA_MPJPE calculation failed!', exp_error)
 
         ## Multiview setting ##
-        if args().num_views > 1 :
+        if (args().num_views > 1) and ('refine_j3d' in outputs) :
             multiview_kp_loss_dict = {'R_P_KP2D':0, 'R_MPJPE':0, 'R_PAMPJPE':0}
             multiview_error = {'R_3d':{'error':[], 'idx':[]},'R_2d':{'error':[], 'idx':[]}}
             
@@ -175,7 +175,7 @@ class Loss(nn.Module):
             params_loss_dict['Prior'] = gmm_prior_loss + angle_prior_loss
 
         # Multiview setting
-        if args().num_views > 1 :
+        if (args().num_views > 1) and ('refine_params' in outputs) :
             if 'refine_params' in outputs:
                 refine_params_loss_dict = {'R_Pose': 0, 'R_Shape':0, 'R_Prior':0}
 

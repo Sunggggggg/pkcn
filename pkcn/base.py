@@ -150,30 +150,33 @@ class Base(object):
         start_time = time.time()
         if self.model_precision=='fp16':
             with autocast():
-                outputs_per_view_list, pose_params, betas = model(meta_data, **cfg_dict)
+                outputs_per_view_list = model(meta_data, **cfg_dict)
         else:
-            outputs_per_view_list, pose_params, betas = model(meta_data, **cfg_dict)
+            outputs_per_view_list = model(meta_data, **cfg_dict)
 
         end_time = time.time()
         inf_time = end_time - start_time
         
         final_outputs_list = []
-        for view_idx, outputs in enumerate(outputs_per_view_list) :
-            outputs['detection_flag'], outputs['reorganize_idx'] = justify_detection_state(outputs['detection_flag'], outputs['reorganize_idx'])
-            # outputs['detection_flag'], outputs['reorganize_idx']
-            # True tensor([0, 1, 2, 3, 4, 5, 6, 7], device='cuda:0')
+        if outputs_per_view_list is None :
+            return None, inf_time
+        else :
+            for view_idx, outputs in enumerate(outputs_per_view_list) :
+                outputs['detection_flag'], outputs['reorganize_idx'] = justify_detection_state(outputs['detection_flag'], outputs['reorganize_idx'])
+                # outputs['detection_flag'], outputs['reorganize_idx']
+                # True tensor([0, 1, 2, 3, 4, 5, 6, 7], device='cuda:0')
 
-            outputs['meta_data']['data_set'] = ds_org[view_idx] # [8]
-            
-            items_new = [[] for _ in range(len(imgpath_org[0]))]   # [8, []]
-            for x in outputs['reorganize_idx'].cpu().numpy():
-                for y, item in enumerate(imgpath_org):
-                    items_new[x].append(imgpath_org[y][x])
+                outputs['meta_data']['data_set'] = ds_org[view_idx] # [8]
+                
+                items_new = [[] for _ in range(len(imgpath_org[0]))]   # [8, []]
+                for x in outputs['reorganize_idx'].cpu().numpy():
+                    for y, item in enumerate(imgpath_org):
+                        items_new[x].append(imgpath_org[y][x])
 
-            outputs['meta_data']['imgpath'] = items_new
-            final_outputs_list.append(outputs)
+                outputs['meta_data']['imgpath'] = items_new
+                final_outputs_list.append(outputs)
         
-        return final_outputs_list, pose_params, betas, inf_time
+        return final_outputs_list, inf_time
 
     def _create_data_loader(self,train_flag=True):
         logging.info('gathering datasets')

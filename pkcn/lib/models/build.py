@@ -11,10 +11,10 @@ from models.dinov2 import Dinov2Backbone
 
 # Model 
 from models.modelv1 import ROMP as ROMPv1
-
+from models.modelv2 import ROMP as ROMPv2
 
 Backbones = {'hrnet': HigherResolutionNet, 'dinov2':Dinov2Backbone}
-Heads = {1: ROMPv1}
+Heads = {1: ROMPv1, 2: ROMPv2}
 
 def build_model():
     if args().backbone in Backbones:

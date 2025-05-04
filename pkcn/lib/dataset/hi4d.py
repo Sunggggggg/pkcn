@@ -9,6 +9,9 @@ from utils.transforms import *
 axis_angle_to_rotation_6d = lambda x : matrix_to_rotation_6d(axis_angle_to_matrix(x.reshape(-1, 3))).reshape(-1)
 tt = lambda x : torch.from_numpy(x).float() if isinstance(x, np.ndarray) else x
 
+IMG_NORM_MEAN = [0.485, 0.456, 0.406]
+IMG_NORM_STD = [0.229, 0.224, 0.225]
+
 def world_to_camera(R, phi):
     """ 
     R : [3, 3] rotation matrix
@@ -36,7 +39,7 @@ class Hi4D(Image_base):
         TEST_SPLIT = [12, 15, 32]
         pair_list = eval(f"{split.upper()}_SPLIT")    
         
-        ### ### 
+        ### Camera ### 
         CAMERA_LIST = [4, 16, 28, 40, 52, 64, 76, 88]
         if args().num_views == 4:
             CAMERA_LIST = [4, 16, 52, 64]
@@ -46,8 +49,9 @@ class Hi4D(Image_base):
 
         ### Data root ###
         Hi4D_ROOT = args().dataset_rootdir
+        person_id_list = ['0', '1']
 
-        intrinsics, extrinsics, smpl_param, file_collects, depth_collects = [], [], [], [], []
+        intrinsics, extrinsics, smpl_param, file_collects, depth_collects, mask_collects = [], [], [], [], [], []
         for pair_id in pair_list :
             subj_folder = osp.join(Hi4D_ROOT, f"pair{pair_id:02d}")
             action_list = [x for x in os.listdir(subj_folder) if osp.isdir(osp.join(subj_folder, x))]
@@ -68,6 +72,8 @@ class Hi4D(Image_base):
                 depth_collect = np.empty((seqlen, len(CAMERA_LIST)), dtype=object)
                 intrin_collect = np.empty((seqlen, len(CAMERA_LIST), 3, 3))
                 extrin_collect = np.empty((seqlen, len(CAMERA_LIST), 3, 4))
+                mask_collect = np.empty((seqlen, len(CAMERA_LIST), 2), dtype=object)
+                
                 for idx, cam_id in enumerate(CAMERA_LIST) :
                     ### Image file ###
                     img_folder = osp.join(subj_folder, action, 'images', str(cam_id))
@@ -84,23 +90,32 @@ class Hi4D(Image_base):
                     
                     intrin_collect[:, idx] = intrinsic 
                     extrin_collect[:, idx] = extrinsic
-
+                    
+                    ### Mask file ###
+                    mask_folder = osp.join(subj_folder, action, 'seg/img_seg_mask')
+                    for person_id in person_id_list :
+                        person_mask_folder = osp.join(mask_folder, str(cam_id), person_id)
+                        person_mask_file_list = sorted(glob.glob(f"{person_mask_folder}/*.png"))   # [T]
+                        mask_collect[:, idx, int(person_id)] = person_mask_file_list
                 
-                file_collect = file_collect.reshape(-1) # [T*[view0, view1, view2, view3]] Tx4
+                file_collect = file_collect.reshape(-1)     # [T*[view0, view1, view2, view3]] Tx4
+                mask_collect = mask_collect.reshape(-1, 2)  # [Tx4, 2]
                 intrin_collect = intrin_collect.reshape(-1, 3, 3)   # [Tx4, 3, 3]
                 extrin_collect = extrin_collect.reshape(-1, 3, 4)   # [Tx4, 3, 4]
                 
                 file_collects.append(file_collect)
+                mask_collects.append(mask_collect)
                 intrinsics.append(intrin_collect)
                 extrinsics.append(extrin_collect)
                 
         file_paths = np.concatenate(file_collects, axis=0)      # [Total_seq * 4]
+        mask_paths = np.concatenate(mask_collects, axis=0)      # [Total_seq * 4, 2]
         intrinsics = np.concatenate(intrinsics, axis=0)     # [Total_seq * 4, 3, 3]
         extrinsics = np.concatenate(extrinsics, axis=0)     # [Total_seq * 4, 3, 4]
         
         print(f">>> Total imgs : {len(file_paths)} / Total seq. : {len(file_paths)//self.camera_view} ")
-        print(f">>> Total camera view : {self.camera_view} ")
         self.file_paths = file_paths
+        self.mask_paths = mask_paths
         self.clip_paths_counting_set()
         
         self.intrinsics = intrinsics
@@ -126,7 +141,7 @@ class Hi4D(Image_base):
         
         assert len(smpl_param) == len(file_paths)//self.camera_view
         # assert len(smpl_param) == len(depth_paths)//self.camera_view, f"{len(smpl_param)} != {len(depth_paths)//self.camera_view}"
-        assert len(file_paths) == len(intrinsics) == len(extrinsics)
+        assert len(file_paths) == len(intrinsics) == len(extrinsics) == len(mask_paths)
         
         if self.regress_smpl:
             from smplx import SMPLLayer
@@ -176,8 +191,9 @@ class Hi4D(Image_base):
 
     def get_image_info(self, index) :        
         imgpath = self.file_paths[index]
-        image = cv2.imread(imgpath)[:, :, ::-1].copy()
-
+        image = Image.open(imgpath).convert('RGB')
+        image = np.asarray(image)
+        
         ### Camera ###
         camIntrin = np.array(self.intrinsics[index])    # [3, 3]
         camExtrin = np.array(self.extrinsics[index])    # [3, 4]
@@ -217,10 +233,6 @@ class Hi4D(Image_base):
         
         kp2ds = np.concatenate([kp2d, self.kps_vis], 1)[None]
         kp3ds = kp3ds - root_trans
-
-        ### Mask ###
-        
-
         
         # vmask_2d | 0: kp2d/bbox | 1: track ids | 2: detect all people in image
         # vmask_3d | 0: kp3d | 1: smpl global orient | 2: smpl body pose | 3: smpl body shape | 4: smpl verts
@@ -241,23 +253,35 @@ class Hi4D(Image_base):
             "camIntrin": camIntrin, 
             "camExtrin": camExtrin,
             "use_depth": False,
-            
-            "kp3d": kp3d,
+            'use_mask': False,
         }
         
         ### Depth map ###
-        if self.use_depth_info :
-            depthpath = self.depth_paths[index]
-            depth_img = Image.open(depthpath).convert('L')
-            depth_vis = np.array(depth_img.copy()).astype(np.uint8)
-            depth_img = np.array(depth_img).astype(np.float32) / 255.0
-            H, W = depth_img.shape[:2]
-            depth_img = depth_img.reshape(H, W, 1) 
+        # if self.use_depth_info :
+        #     depthpath = self.depth_paths[index]
+        #     depth_img = Image.open(depthpath).convert('L')
+        #     depth_vis = np.array(depth_img.copy()).astype(np.uint8)
+        #     depth_img = np.array(depth_img).astype(np.float32) / 255.0
+        #     H, W = depth_img.shape[:2]
+        #     depth_img = depth_img.reshape(H, W, 1) 
             
-            img_info['use_depth'] = True
-            img_info['depth_image'] = depth_img
-            img_info['depth_vis'] = depth_vis
+        #     img_info['use_depth'] = True
+        #     img_info['depth_image'] = depth_img
+        #     img_info['depth_vis'] = depth_vis
+        
+        ### Mask ###
+        if args().use_mask :
+            maskpath = self.mask_paths[index, self.select_id]
             
+            mask = Image.open(maskpath).convert('L')
+            mask = np.asarray(mask).astype(np.float32) / 255.0
+            
+            H, W = mask.shape[:2]
+            mask = mask.reshape(H, W, 1) 
+
+            img_info['use_mask'] = True
+            img_info['mask'] = mask
+        
         return img_info
     
     def smpl_forward(self, smpl_params):
