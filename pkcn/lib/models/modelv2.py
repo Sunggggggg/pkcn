@@ -21,7 +21,7 @@ import config
 from config import args
 from loss_funcs import Loss
 from maps_utils.result_parser import ResultParser
-from utils.mapping_utils import reassign_ids
+from utils.mapping_utils import reassign_ids, assign_all_ids
 
 if args().model_precision=='fp16':
     from torch.cuda.amp import autocast
@@ -173,7 +173,9 @@ class ROMP(Base):
         pose_features = outputs["feature_maps"][reorganize_idx].flatten(2) 
         cam_shape_features = self.pose_shape_layer(outputs["feature_maps"])[reorganize_idx].flatten(2)
 
-        center_feature = outputs["params_pred"]
+        center_feature1 = outputs["params_pred_max"]
+        center_feature2 = outputs['params_pred']
+
         params_pred = outputs["params_pred"].reshape(-1,num_joints+1,num_channels)  # [N, 24+1, 16] 사람 수만큼
         params_pred = self.idx_mlp(params_pred)                                     # [N, 25, 128]
 
@@ -195,7 +197,9 @@ class ROMP(Base):
         outputs["params_pred"] = params_pred
         outputs["segm_maps"] = segm_maps.reshape(-1,num_joints+1,args().centermap_size, args().centermap_size)  # [N, 25, 64, 64]
         
-        outputs["center_feature"] = center_feature
+        outputs["cen_feat1"] = center_feature1
+        outputs["cen_feat2"] = center_feature2
+        
         return outputs
     
     def multiview_forward(self, outputs_list, eval=False):
@@ -238,6 +242,7 @@ class ROMP(Base):
         max_person = args().max_person
 
         outputs_per_view_list = []
+        cen_feat1_list, cen_feat2_list = [], []
         for view, outputs in enumerate(outputs_list) :
             meta_data = outputs['meta_data']
             
@@ -245,18 +250,24 @@ class ROMP(Base):
             outputs_per_view = self.params_map_parser(outputs_per_view, meta_data)
             per_view_feat = outputs_per_view[f"feat_{view}"]        # [N, 24, 128] (N : 사람의 수)
 
-            if 0 < per_view_feat.shape[0] <= max_person :
-                outputs_per_view_list.append(outputs_per_view)
+            cen_feat1 = outputs_per_view['cen_feat1']
+            cen_feat2 = outputs_per_view['cen_feat2']
+                
+            if per_view_feat.shape[0] != max_person :
+                cen_feat1 = cen_feat1.expand(max_person, -1)
+                cen_feat2 = cen_feat2.expand(max_person, -1)
+               
+            outputs_per_view_list.append(outputs_per_view)
+            cen_feat1_list.append(cen_feat1)   # [사람수, 400]
+            cen_feat2_list.append(cen_feat2)   # [사람수, 400]
                 
         ### Matching algo. ###
-        appear_feat_list = []
-        for outputs in outputs_per_view_list:
-            appear_feat_list.append(outputs['center_feature'])   # [N, 400]
-
-        # appear_feat = torch.stack(appear_feat_list, dim=0)
-        ids = reassign_ids(appear_feat_list)
-        outputs_per_view_list, multi_view_feat, ray_list = self.re_id_mapping(ids, outputs_per_view_list)
-        multi_view_feat = self.multiview_encoder(multi_view_feat, ray_list)       # [N, 2, 24, 128]
+        cen_feat1_list = torch.stack(cen_feat1_list, dim=0)             # [시점수, 사람수, 400]
+        cen_feat2_list = torch.stack(cen_feat2_list, dim=0)             # [시점수, 사람수, 400]
+        
+        ids = assign_all_ids(cen_feat1_list, cen_feat2_list)
+        outputs_per_view_list, multi_view_feat = self.re_id_mapping(ids, outputs_per_view_list)
+        multi_view_feat = self.multiview_encoder(multi_view_feat)       # [N, 2, 24, 128]
         
         pose_params = self.global_pose_mlp(multi_view_feat).flatten(1)  # [B, 24, 6]
         betas = self.global_shape_mlp(multi_view_feat.flatten(1))       # [B, 10]
@@ -266,7 +277,13 @@ class ROMP(Base):
             if 0 < reorganize_idx.shape[0] <= max_person :
                 outputs_per_view_list[idx].update(self.params_map_parser.forward_refine(outputs['params'], pose_params, betas))
                 
-        return outputs_per_view_list, pose_params, betas
+                refine_output = {
+                    'body_pose': pose_params.expand(args().max_person, 144),
+                    'betas': betas.expand(args().max_person, 10)
+                }
+                outputs_per_view_list[idx].update(refine_output)
+
+        return outputs_per_view_list
 
     def re_id_mapping(self, ids, outputs_per_view_list):
         mutiview_feat = []
@@ -292,9 +309,6 @@ class ROMP(Base):
                 re_id_outputs_per_view_list[view_idx]['params']['betas'] = outputs['params']['betas'].expand(args().max_person, 10)[re_id]
                 re_id_outputs_per_view_list[view_idx]['params']['cam'] = outputs['params']['cam'].expand(args().max_person, 3)[re_id]
                 
-                re_id_outputs_per_view_list[view_idx]['ray_d'] = outputs['ray_d'].expand(args().max_person, 3)[re_id]
-                re_id_outputs_per_view_list[view_idx]['attn_weight'] = outputs['attn_weight']   # [B, Cate, 256]
-    
                 mutiview_feat.append(outputs[f'feat_{view_idx}'].expand(args().max_person, 24, 128)[re_id])
                 
         mutiview_feat = torch.stack(mutiview_feat, dim=1)   # [사람수, N, 24, 400]

@@ -165,7 +165,7 @@ class Hi4D(Image_base):
         self.clip_paths = clip_paths
 
     def __len__(self) :
-            return len(self.clip_paths)
+        return len(self.clip_paths)
 
     def __getitem__(self, index):
         mini_batch = []
@@ -189,10 +189,13 @@ class Hi4D(Image_base):
         mini_batch = default_collate(mini_batch)
         return mini_batch
 
-    def get_image_info(self, index) :        
+    def get_image_info(self, index) :
         imgpath = self.file_paths[index]
-        image = Image.open(imgpath).convert('RGB')
-        image = np.asarray(image)
+        if args().backbone == 'dinov2':
+            image = Image.open(imgpath).convert('RGB')
+            image = np.asarray(image)
+        else :  # HRNet
+            image = cv2.imread(imgpath)[:, :, ::-1].copy()
         
         ### Camera ###
         camIntrin = np.array(self.intrinsics[index])    # [3, 3]

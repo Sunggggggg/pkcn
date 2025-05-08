@@ -10,6 +10,7 @@ from typing import Optional, Union
 
 import torch
 import torch.nn.functional as F
+import numpy as np
 
 Device = Union[str, torch.device]
 
@@ -826,3 +827,35 @@ def avg_rot(rot):
     U, _, V = torch.svd(rot)
     rot = U @ V.transpose(-1, -2)
     return rot
+
+def projectPoints(X, K, R, t, Kd):
+    """
+    Projects points X (3xN) using camera intrinsics K (3x3),
+    extrinsics (R,t) and distortion parameters Kd=[k1,k2,p1,p2,k3].
+    Roughly, x = K*(R*X + t) + distortion
+    See http://docs.opencv.org/2.4/doc/tutorials/
+    calib3d/camera_calibration/camera_calibration.html
+    or cv2.projectPoints
+    """
+
+    x = np.dot(R, X) + t
+
+    x[0:2, :] = x[0:2, :] / (x[2, :] + 1e-5)
+
+    r = x[0, :] * x[0, :] + x[1, :] * x[1, :]
+
+    x[0, :] = (
+            x[0, :]
+            * (1 + Kd[0] * r + Kd[1] * r * r + Kd[4] * r * r * r)
+            + 2 * Kd[2] * x[0, :] * x[1, :]
+            + Kd[3] * (r + 2 * x[0, :] * x[0, :]))
+    x[1, :] = (
+            x[1, :]
+            * (1 + Kd[0] * r + Kd[1] * r * r + Kd[4] * r * r * r)
+            + 2 * Kd[3] * x[0, :] * x[1, :]
+            + Kd[2] * (r + 2 * x[1, :] * x[1, :]))
+
+    x[0, :] = K[0, 0] * x[0, :] + K[0, 1] * x[1, :] + K[0, 2]
+    x[1, :] = K[1, 0] * x[0, :] + K[1, 1] * x[1, :] + K[1, 2]
+
+    return x

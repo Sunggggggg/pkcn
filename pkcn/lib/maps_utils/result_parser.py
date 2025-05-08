@@ -72,6 +72,18 @@ class ResultParser(nn.Module):
 
         if 'params_maps' in outputs and 'params_pred' not in outputs:      
             outputs['params_pred'] = self.parameter_sampling(outputs['params_maps'], batch_ids, flat_inds, use_transform=True)
+        
+        if 'params_pred_block' not in outputs :
+            all_inds = [expand_flat_inds(flat_inds[i], args().centermap_size, args().centermap_size, False)
+                        for i in range(len(flat_inds))]
+
+            params_pred_block = self.parameter_block_sampling(outputs['params_maps'], batch_ids, all_inds)  # [N, 5, 400]
+            # params_pred_max, _ = torch.max(params_pred_block, dim=1)
+            kernel_size = params_pred_block.shape[1]
+            params_pred_max = torch.max_pool1d(params_pred_block.permute(0, 2, 1), kernel_size=kernel_size, stride=1)
+            params_pred_max = params_pred_max.squeeze(-1)
+            
+            outputs['params_pred_max'] = params_pred_max
             
         if 'offset_maps' in outputs:
             offset = self.parameter_sampling(outputs['offset_maps'], batch_ids, flat_inds, use_transform=True)
@@ -233,13 +245,15 @@ class ResultParser(nn.Module):
             outputs['depth_pred'] = depth_pred
             outputs['center_3d'] = center_3d
             
-        # if 'params_pred_block' not in outputs :
-        if False :
+        if 'params_pred_block' not in outputs :
             all_inds = [expand_flat_inds(flat_inds[i], args().centermap_size, args().centermap_size, False)
                         for i in range(len(flat_inds))]
 
             params_pred_block = self.parameter_block_sampling(outputs['params_maps'], batch_ids, all_inds)  # [N, 5, 400]
-            params_pred_max, _ = torch.max(params_pred_block, dim=1)
+            # params_pred_max, _ = torch.max(params_pred_block, dim=1)
+            kernel_size = params_pred_block.shape[1]
+            params_pred_max = torch.max_pool1d(params_pred_block.permute(0, 2, 1), kernel_size=kernel_size, stride=1)
+            params_pred_max = params_pred_max.squeeze(-1)
             
             outputs['params_pred_max'] = params_pred_max
             

@@ -1,0 +1,28 @@
+
+ARGS:
+ tab: 'Hi4D_TEST'
+ num_views: 4
+ dataset_rootdir: '/mnt/data/hi4d_dataset'
+ output_dir: './dump/RoPE'
+ eval_dataset: 'hi4d_test'
+ GPUS: 0
+ model_version: 3
+ distributed_training: False
+
+ mode: 'parsing'
+
+ master_batch_size: -1
+ val_batch_size: 1
+ nw_eval: 2
+ eval: True
+ collision_aware_centermap: False
+ collision_factor: 0.2
+ calc_PVE_error: True
+
+ backbone: 'hrnet'
+ centermap_size: 64
+ centermap_conf_thresh: 0.2
+ max_person: 2
+
+ #model_path: /mnt/SKY/checkpoints/hrnet_cm64_mask_token_on_gpu0,1_val/hrnet_cm64_mask_token_54.pkl
+ model_path: /mnt/SKY/checkpoints/hrnet_cm64_RoPE_on_gpu0,1_val/hrnet_cm64_RoPE_63.pkl

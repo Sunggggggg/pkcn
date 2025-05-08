@@ -15,7 +15,7 @@ from models.CoordConv import get_coord_maps
 from models.basic_modules import BasicBlock
 from models.smpl_wrapper import SMPLWrapper
 from models.ktd import KTD
-from models.transformer import SVTransformer
+from models.transformer import SVTransformer, RoPE_SVTransformer
 
 import config
 from config import args
@@ -34,6 +34,8 @@ class ROMP(Base):
         print('=========== Model infomation ===========')
         print(f'Backbone : {args().backbone}')
         print(f'# of viewpoints {args().num_views}')
+        print('RoPE Version')
+        
         self.num_views = args().num_views
         self.backbone = backbone
         self._result_parser = ResultParser()
@@ -53,7 +55,8 @@ class ROMP(Base):
             
         self.view_keys = ['image', 'person_centers', 'centermap', 'offsets', 
                           'all_person_detected_mask', 'full_kp2d', 'valid_masks', 
-                          'kp_3d', 'params', 'global_params', 'image_org', 'subject_ids', 'rot_flip']
+                          'kp_3d', 'params', 'global_params', 'image_org', 'subject_ids', 'rot_flip',
+                          'mask']
         self.meta_keys = ['batch_ids', 'epoch', 'iter_idx']
 
     def matching_forward(self, meta_data, **cfg):
@@ -105,20 +108,34 @@ class ROMP(Base):
         return outputs_list
 
     def feed_forward(self, meta_data):
-        x = self.backbone(meta_data['image'].contiguous().cuda())   # [B, 32, 128, 128]
-        outputs = self.head_forward(x)
+        img = meta_data['image'].contiguous().cuda()
+        mask = meta_data['mask'].contiguous().cuda()
+
+        x = self.backbone(img)   # [B, 32, 128, 128]
+        outputs = self.head_forward(x, img, mask)
         return outputs
 
-    def head_forward(self,x):
+    def head_forward(self, x, img, mask):
+        """
+        x       : [B, 32, 128, 128]
+        img     : => [B, 3, 512, 512]
+        mask    : => [B, 1, 512, 512]
+        """
         x = torch.cat((x, self.coordmaps.to(x.device).repeat(x.shape[0],1,1,1)), 1)
+        img = img.permute(0, 3, 1, 2)   # [B, 3, H, W]
+        mask = mask.permute(0, 3, 1, 2) # [B, 1, H, W]
         
         params_maps = self.final_layers[1](x)
         center_maps = self.final_layers[2](x)
         segment_maps = self.final_layers[3](x)
         feature_maps = self.final_layers[4](x)
-
-        output = {'params_maps':params_maps.float(), 'center_map':center_maps.float(), 
-                  'segmentation_maps':segment_maps.float(), 'feature_maps':feature_maps.float()}
+        
+        output = {'params_maps':params_maps.float(),        # [B, 400, cm, cm]
+                  'center_map':center_maps.float(),         # [B, 1, cm, cm]
+                  'segmentation_maps':segment_maps.float(), # [B, 128, cm, cm]
+                  'feature_maps':feature_maps.float(),      # [B, 128, cm, cm]
+                  }
+        
         return output
 
     def tail_forward(self,outputs, view):
@@ -298,7 +315,7 @@ class ROMP(Base):
                            'NUM_CHANNELS': num_channels}
 
         self.final_layers = self._make_final_layers(self.backbone.backbone_channels)
-        self.coordmaps = get_coord_maps(32)
+        self.coordmaps = get_coord_maps(128)
 
     def _build_decoder(self):
         num_channels, num_joints = 16, 24
@@ -327,12 +344,12 @@ class ROMP(Base):
         final_layers = []
         input_channels += 2
 
-        final_layers.append(None)
-        final_layers.append(self._make_head_layers(input_channels, self.output_cfg['NUM_PARAM_MAP']))   # 64
-        final_layers.append(self._make_head_layers(input_channels, self.output_cfg['NUM_CENTER_MAP']))  # 1
-        final_layers.append(self._make_head_layers(input_channels, self.output_cfg['NUM_CHANNELS'] * 8))# 400
-        final_layers.append(self._make_head_layers(input_channels, self.output_cfg['NUM_CHANNELS'] * 8))# 400
-
+        final_layers.append(None)   # 0
+        final_layers.append(self._make_head_layers(input_channels, self.output_cfg['NUM_PARAM_MAP']))   # 1
+        final_layers.append(self._make_head_layers(input_channels, self.output_cfg['NUM_CENTER_MAP']))  # 2
+        final_layers.append(self._make_head_layers(input_channels, self.output_cfg['NUM_CHANNELS'] * 8))# 3
+        final_layers.append(self._make_head_layers(input_channels, self.output_cfg['NUM_CHANNELS'] * 8))# 4
+    
         return nn.ModuleList(final_layers)
 
     def _make_head_layers(self, input_channels, output_channels):
@@ -360,22 +377,22 @@ class ROMP(Base):
             kernel_size=1,stride=1,padding=0))
 
         return nn.Sequential(*head_layers)
-
+    
     def _build_multiview_module(self):
         num_channels = self.output_cfg['NUM_CHANNELS']  # 16
         input_dim = embed_dim = num_channels * 8        # 128
         num_joints = self.head_cfg['NUM_JOINTS']
         
         # Multiview Spatial Transformer
-        self.multiview_encoder = SVTransformer(input_dim, embed_dim, num_joints)
+        self.multiview_encoder = RoPE_SVTransformer(input_dim, embed_dim, num_joints)
         self.global_pose_mlp = KTD(num_channels * 8)
         self.global_shape_mlp = nn.Linear(num_joints * embed_dim, 10)
 
     def _get_trans_cfg(self):
         if self.outmap_size == 32:
-            kernel_sizes = [3]
-            paddings = [1]
-            strides = [1]
+            kernel_sizes = [3,3]
+            paddings = [1,1]
+            strides = [2,2]
         elif self.outmap_size == 64:
             kernel_sizes = [3]
             paddings = [1]
@@ -384,7 +401,6 @@ class ROMP(Base):
             kernel_sizes = [3]
             paddings = [1]
             strides = [1]
-            
         elif self.outmap_size == 16:
             kernel_sizes = [3]
             paddings = [1]

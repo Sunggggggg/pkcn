@@ -246,7 +246,7 @@ class Rel_SVTransformer(nn.Module):
     """
     Spatial, View-aware, Relative positional encoding
     """
-    def __init__(self, input_dim, embed_dim, num_joint, num_view,
+    def __init__(self, input_dim, embed_dim, num_joint, num_view=4,
                  num_heads=8, drop_rate=0., drop_path_rate=0., mlp_ratio=2.,
                  qkv_bias=True, qk_scale=None, attn_drop_rate=0., depth=3,):
         super(Rel_SVTransformer, self).__init__()
@@ -302,6 +302,65 @@ class Rel_SVTransformer(nn.Module):
         x = x.mean(dim=1)   # [B, J, C]
         return x
 
+class RoPE_SVTransformer(nn.Module):
+    def __init__(self, input_dim, embed_dim, num_joint,
+                 num_heads=8, drop_rate=0., drop_path_rate=0., mlp_ratio=2.,
+                 qkv_bias=True, qk_scale=None, attn_drop_rate=0., depth=3,):
+        super(RoPE_SVTransformer, self).__init__()
+        from .rope import RoPE
+        
+        # Embedding layer
+        self.embedding = nn.Linear(input_dim, embed_dim)
+        
+        # Positional encoding
+        self.pos_encoding = nn.Parameter(torch.randn(1, 1, num_joint, embed_dim)) 
+        self.view_pos_encoding = RoPE(embed_dim, max_seq_len=8)
+        self.pos_drop = nn.Dropout(p=drop_rate)
+
+        dpr = [x.item() for x in torch.linspace(0, drop_path_rate, depth)]  # stochastic depth decay rule
+        self.depth = depth
+        norm_layer = nn.LayerNorm
+
+        self.SpatialBlocks = nn.ModuleList([
+            Block(dim=embed_dim, num_heads=num_heads, mlp_ratio=mlp_ratio, qkv_bias=qkv_bias, qk_scale=qk_scale,
+                drop=drop_rate, attn_drop=attn_drop_rate, drop_path=dpr[i], norm_layer=norm_layer)
+            for i in range(depth)])
+
+        self.ViewBlock = nn.ModuleList([
+            Block(dim=embed_dim, num_heads=num_heads, mlp_ratio=mlp_ratio, qkv_bias=qkv_bias, qk_scale=qk_scale,
+                drop=drop_rate, attn_drop=attn_drop_rate, drop_path=dpr[i], norm_layer=norm_layer)
+            for i in range(depth)])
+
+        self.norm_s = norm_layer(embed_dim)
+        self.norm_v = norm_layer(embed_dim)
+        
+    def forward(self, x):
+        """ x : [B, N, J, C]
+        """
+        B, N, J, C = x.size()
+        x = self.embedding(x)
+        x = x + self.pos_encoding[:, :, :J, :]  # [B, N, J, C]
+        x = rearrange(x, 'b n j c -> (b j) n c')
+        x = self.view_pos_encoding.rotate_embedding(x)
+        x = rearrange(x, '(b j) n c -> b n j c', b=B, j=J)
+        
+        for i in range(self.depth) :
+            blk1 = self.SpatialBlocks[i]
+            blk2 = self.ViewBlock[i]
+            
+            x = rearrange(x, 'b n j c -> (b n) j c')
+            x = blk1(x)
+            x = self.norm_s(x)
+            
+            x = rearrange(x, '(b n) j c -> (b j) n c', b=B, n=N)
+            x = blk2(x)
+            x = self.norm_v(x)
+        
+            x = rearrange(x, '(b j) n c -> b n j c', b=B, j=J)
+        
+        x = x.mean(dim=1)   # [B, J, C]
+        return x
+    
 if __name__ == "__main__":
     # model = SVTransformer(input_dim=512, embed_dim=256, num_joint=24)
     model = Rel_SVTransformer(input_dim=512, embed_dim=256, num_joint=24, num_view=4)

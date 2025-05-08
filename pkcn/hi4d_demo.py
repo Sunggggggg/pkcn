@@ -42,7 +42,7 @@ class Tester(Base):
                 imgpath_list = meta_data['imgpath']
                 
                 meta_data_org = meta_data.copy()
-                outputs_list, pred_pose_params, pred_betas, inf_time = self.multiview_network_forward(eval_model, meta_data, self.eval_cfg)
+                outputs_list, inf_time = self.multiview_network_forward(eval_model, meta_data, self.eval_cfg)
 
                 inf_time_list.append(inf_time)
                 for idx, (outputs, imgpath) in enumerate(zip(outputs_list, imgpath_list)) :
@@ -60,6 +60,8 @@ class Tester(Base):
                         
                         refine_verts = outputs['refine_verts'].contiguous()
                         cam_trans = outputs['cam_trans'].contiguous()
+
+                        pred_pose_params, pred_betas = outputs['body_pose'], outputs['betas']
 
                         final_verts = (refine_verts + cam_trans[:, None]).detach().cpu().numpy()
                         detected_person = len(final_verts)
